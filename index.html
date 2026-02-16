@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pull Over SmartPOS</title>
+
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b1220">
+
+<style>
+:root{
+  --bg:#0b1220;
+  --card:#111827;
+  --accent:#16a34a;
+  --danger:#dc2626;
+  --muted:#1f2937;
+  --text:#e5e7eb;
+}
+
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  font-family:Segoe UI, sans-serif;
+  background:var(--bg);
+  color:var(--text);
+}
+
+.container{
+  max-width:520px;
+  margin:auto;
+  padding:18px;
+}
+
+.card{
+  background:var(--card);
+  padding:18px;
+  border-radius:14px;
+  margin-bottom:16px;
+  box-shadow:0 8px 20px rgba(0,0,0,0.35);
+  animation:fadeSlide .4s ease;
+}
+
+@keyframes fadeSlide{
+  from{opacity:0;transform:translateY(15px)}
+  to{opacity:1;transform:translateY(0)}
+}
+
+input,select{
+  width:100%;
+  padding:12px;
+  margin-top:10px;
+  background:var(--muted);
+  border:none;
+  border-radius:8px;
+  color:white;
+}
+
+button{
+  width:100%;
+  padding:12px;
+  margin-top:12px;
+  border:none;
+  border-radius:8px;
+  font-weight:600;
+  background:var(--accent);
+  color:white;
+  transition:.2s;
+}
+
+button:active{transform:scale(.95)}
+button.danger{background:var(--danger)}
+button.secondary{background:#2563eb}
+
+.nav{
+  display:flex;
+  gap:8px;
+  margin-bottom:15px;
+}
+
+.nav button{
+  flex:1;
+  background:var(--muted);
+}
+
+.grid{
+  display:grid;
+  grid-template-columns:repeat(2,1fr);
+  gap:10px;
+}
+
+.product{
+  background:var(--muted);
+  padding:16px;
+  border-radius:10px;
+  text-align:center;
+  transition:.15s;
+}
+
+.product:active{
+  transform:scale(.94);
+  background:#374151;
+}
+
+.cart-panel{
+  position:fixed;
+  bottom:0;
+  left:0;
+  right:0;
+  background:var(--card);
+  padding:15px;
+  border-top-left-radius:20px;
+  border-top-right-radius:20px;
+  box-shadow:0 -8px 20px rgba(0,0,0,0.4);
+  transform:translateY(80%);
+  transition:.3s;
+}
+
+.cart-panel.open{transform:translateY(0)}
+
+.counter{
+  font-size:26px;
+  font-weight:700;
+}
+
+.small{
+  font-size:12px;
+  opacity:.6;
+}
+
+.sync-dot{
+  display:inline-block;
+  width:10px;
+  height:10px;
+  border-radius:50%;
+  background:#16a34a;
+  animation:pulse 1.5s infinite;
+}
+
+@keyframes pulse{
+  0%{opacity:1}
+  50%{opacity:.3}
+  100%{opacity:1}
+}
+
+.hidden{display:none}
+</style>
+</head>
+
+<body>
+<div class="container">
+
+<div id="app">
+
+<div class="nav">
+<button onclick="showSales()">Sales</button>
+<button onclick="showStock()">Stock</button>
+<button onclick="showDashboard()">Dashboard</button>
+</div>
+
+<div id="content"></div>
+
+<div class="small">
+Device: <span id="deviceID"></span> |
+<span id="syncStatus"></span> |
+Stock: <span id="stockSyncStatus"></span>
+<span id="lastStockSync" style="margin-left:8px;opacity:.7;font-size:12px"></span>
+</div>
+
+</div>
+</div>
+
+<div id="cartPanel" class="cart-panel">
+<h3>Cart</h3>
+<div id="cartList"></div>
+<h2 style="color:#16a34a">Total: K <span id="total">0</span></h2>
+<select id="payment" onchange="updateChangeCalc()">
+<option>Cash</option>
+<option>Mobile Money</option>
+<option>POS</option>
+<option>Credit</option>
+</select>
+<div id="changeContainer" style="display:none">
+<label style="font-size:12px;opacity:.7">Amount Paid</label>
+<input type="number" id="amountPaid" placeholder="Enter amount" oninput="calculateChange()" style="margin-top:5px">
+<div style="margin-top:10px;padding:10px;background:var(--muted);border-radius:8px">
+<div style="font-size:12px;opacity:.6">Change Due</div>
+<div style="font-size:20px;font-weight:700;color:#16a34a">K <span id="changeAmount">0</span></div>
+</div>
+</div>
+<button onclick="completeSale()">Complete Sale</button>
+</div>
+
+<script>
+const API="https://script.google.com/macros/s/AKfycbz6osXVA11-XEIX_MZT6N5SNhtTlNz4NCwp2SSB6HJcvnZhIBPtx7ibPCq_m_fnINOCvw/exec";
+
+let device=localStorage.getItem("deviceID");
+if(!device){
+device="DEV-"+Math.random().toString(36).substring(2,9);
+localStorage.setItem("deviceID",device);
+}
+document.getElementById("deviceID").innerText=device;
+
+let cashier="Cashier";
+let cart=[];
+let products=[];
+let offlineSales=JSON.parse(localStorage.getItem("offlineSales")||"[]");
+let offlineStock=JSON.parse(localStorage.getItem('offlineStock')||'[]');
+
+initApp();
+
+function initApp(){
+loadProducts();
+showSales();
+syncSales();
+syncStock();
+updateStockSyncStatus();
+}
+
+async function loadProducts(){
+  let localProducts = JSON.parse(localStorage.getItem("products")||"null");
+  if (localProducts) {
+    products = localProducts;
+    return;
+  }
+
+  try {
+    const res = await fetch(API+"?type=products");
+    const apiProducts = await res.json();
+    // Map legacy array format [id, name, price] to objects if needed
+    if (Array.isArray(apiProducts) && apiProducts.length && Array.isArray(apiProducts[0])) {
+      products = apiProducts.map(p => ({ id: p[0], name: p[1], price: p[2], category: 'uncategorized', cost: 0, stock: 0, openingStock: 0, purchases: 0, closingStock: 0, sold: 0, image: '📦' }));
+    } else {
+      products = apiProducts;
+    }
+    localStorage.setItem("products", JSON.stringify(products));
+  } catch (e) {
+    // Default product list
+    products = [
+      { id: 1, name: "Mosi Lager", category: "beer", price: 25, cost: 15, stock: 45, openingStock: 50, purchases: 0, closingStock: 45, sold: 5, image: "🍺" },
+      { id: 2, name: "Castle Lite", category: "beer", price: 28, cost: 17, stock: 32, openingStock: 40, purchases: 0, closingStock: 32, sold: 8, image: "🍺" },
+      { id: 3, name: "Black Label", category: "beer", price: 30, cost: 18, stock: 18, openingStock: 25, purchases: 0, closingStock: 18, sold: 7, image: "🍺" },
+      { id: 4, name: "Smirnoff Vodka", category: "spirits", price: 120, cost: 80, stock: 12, openingStock: 15, purchases: 0, closingStock: 12, sold: 3, image: "🥃" },
+      { id: 5, name: "Jameson Whiskey", category: "spirits", price: 180, cost: 120, stock: 8, openingStock: 10, purchases: 0, closingStock: 8, sold: 2, image: "🥃" },
+      { id: 6, name: "Coca Cola", category: "drinks", price: 15, cost: 8, stock: 60, openingStock: 70, purchases: 0, closingStock: 60, sold: 10, image: "🥤" },
+      { id: 7, name: "Fanta Orange", category: "drinks", price: 15, cost: 8, stock: 45, openingStock: 50, purchases: 0, closingStock: 45, sold: 5, image: "🥤" },
+      { id: 8, name: "Savanna Cider", category: "ciders", price: 35, cost: 20, stock: 22, openingStock: 25, purchases: 0, closingStock: 22, sold: 3, image: "🍏" },
+      { id: 9, name: "Hunter's Gold", category: "ciders", price: 32, cost: 18, stock: 15, openingStock: 20, purchases: 0, closingStock: 15, sold: 5, image: "🍏" },
+      { id: 10, name: "Chicken Wings", category: "food", price: 65, cost: 35, stock: 30, openingStock: 40, purchases: 0, closingStock: 30, sold: 10, image: "🍗" },
+      { id: 11, name: "Chips", category: "food", price: 25, cost: 10, stock: 50, openingStock: 60, purchases: 0, closingStock: 50, sold: 10, image: "🍟" },
+      { id: 12, name: "Burger", category: "food", price: 75, cost: 40, stock: 20, openingStock: 25, purchases: 0, closingStock: 20, sold: 5, image: "🍔" }
+    ];
+    localStorage.setItem("products", JSON.stringify(products));
+  }
+}
+
+function showSales(){
+  document.getElementById('content').innerHTML = `<div class="card"><h3>Sales - ${cashier}</h3><div class="grid" id="productGrid"></div></div>`;
+  renderProducts();
+}
+
+function renderProducts(){
+  const grid = document.getElementById('productGrid');
+  if(!grid) return;
+  grid.innerHTML = '';
+  products.forEach(p=>{
+    const div = document.createElement('div');
+    div.className = 'product';
+    div.innerHTML = `${p.image || ''}<div style="margin-top:8px">${p.name}</div><div style="margin-top:6px">K ${p.price}</div><div style="font-size:12px;opacity:.7;margin-top:6px">${p.stock||0} in stock</div>`;
+    div.onclick = ()=>addToCart(p.id);
+    grid.appendChild(div);
+  });
+}
+
+function addToCart(id){
+  const prod = products.find(p=>p.id==id || p.id===Number(id));
+  if(!prod){ alert('Product not found'); return; }
+  const existing = cart.find(c=>c.id==prod.id);
+  if(existing) existing.qty = (existing.qty||1)+1; else cart.push({ id: prod.id, name: prod.name, price: prod.price, qty: 1 });
+  document.getElementById('cartPanel').classList.add('open');
+  updateCart();
+}
+
+function updateCart(){
+  let total=0;
+  const cartListEl = document.getElementById('cartList');
+  cartListEl.innerHTML = '';
+  cart.forEach(i=>{
+    total += Number(i.price) * (i.qty||1);
+    cartListEl.innerHTML += `<div>${i.name} x${i.qty||1} - K ${Number(i.price)*(i.qty||1)}</div>`;
+  });
+  document.getElementById('total').innerText = total;
+  document.getElementById('amountPaid').value = '';
+  document.getElementById('changeAmount').innerText = '0';
+}
+
+function updateChangeCalc(){
+  const payment = document.getElementById('payment').value;
+  const changeContainer = document.getElementById('changeContainer');
+  if(payment === 'Cash') changeContainer.style.display = 'block';
+  else changeContainer.style.display = 'none';
+}
+
+function calculateChange(){
+const total=Number(document.getElementById("total").innerText);
+const amountPaid=Number(document.getElementById("amountPaid").value)||0;
+const change=Math.max(0,amountPaid-total);
+document.getElementById("changeAmount").innerText=change;
+}
+
+function completeSale(){
+if(cart.length===0) return;
+const payment=document.getElementById("payment").value;
+
+  cart.forEach(item=>{
+    offlineSales.push({
+      action:"sale",
+      cashier,
+      device,
+      branch:"Main",
+      item:item.name,
+      qty:item.qty||1,
+      price:item.price,
+      total: Number(item.price)*(item.qty||1),
+      payment,
+      synced:false
+    });
+    const prod = products.find(p=>p.id==item.id);
+    if(prod && prod.stock!==undefined) prod.stock = Math.max(0, (prod.stock||0) - (item.qty||1));
+    // enqueue stock update for backend sync
+    offlineStock.push({
+      action: 'stock_update',
+      device,
+      productId: prod ? prod.id : item.id,
+      name: item.name,
+      stock: prod ? prod.stock : 0,
+      price: item.price,
+      timestamp: new Date().toISOString(),
+      synced: false
+    });
+  });
+
+  localStorage.setItem("offlineSales",JSON.stringify(offlineSales));
+  localStorage.setItem("products",JSON.stringify(products));
+  cart=[];
+  updateCart();
+  document.getElementById('cartPanel').classList.remove('open');
+  syncSales();
+}
+
+async function syncSales(){
+  for(let sale of offlineSales){
+    if(!sale.synced){
+      try{
+        await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'sale', payload: sale }) });
+        sale.synced = true;
+      }catch(e){ console.error('syncSales error', e); break; }
+    }
+  }
+  localStorage.setItem('offlineSales', JSON.stringify(offlineSales));
+  updateSyncStatus();
+}
+
+async function syncStock(){
+  for(let s of offlineStock){
+    if(!s.synced){
+      try{
+        await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'stock', payload: s }) });
+        s.synced = true;
+      }catch(e){ console.error('syncStock error', e); break; }
+    }
+  }
+  localStorage.setItem('offlineStock', JSON.stringify(offlineStock));
+  updateSyncStatus();
+  updateStockSyncStatus();
+}
+
+function updateSyncStatus(){
+  const unsynced = offlineSales.filter(s=>!s.synced).length;
+  document.getElementById('syncStatus').innerHTML = unsynced ? `<span style="color:#dc2626">● ${unsynced} Unsynced</span>` : `<span class="sync-dot"></span>Synced`;
+}
+
+function updateStockSyncStatus(){
+  const unsynced = offlineStock.filter(s=>!s.synced).length;
+  const el = document.getElementById('stockSyncStatus');
+  if(el) el.innerHTML = unsynced ? `<span style="color:#dc2626">● ${unsynced} Unsynced</span>` : `<span class="sync-dot"></span>Synced`;
+  const last = offlineStock.slice().filter(s=>s.synced).slice(-1)[0];
+  const lastEl = document.getElementById('lastStockSync');
+  if(lastEl) lastEl.innerText = last && last.timestamp ? `Last: ${new Date(last.timestamp).toLocaleString()}` : '';
+}
+
+setInterval(syncSales,8000);
+setInterval(syncStock,10000);
+
+function showDashboard(){
+  let total=0;
+  let saleCount=0;
+  offlineSales.forEach(s=>{ total+=Number(s.total||0); saleCount++; });
+  document.getElementById('content').innerHTML = `<div class="card">\n<h3>Dashboard</h3>\n<div class="counter" id="counter">0</div>\n<p>Total Sales Today</p>\n<p class="small">Transactions: ${saleCount}</p>\n<button onclick="sendWhatsAppReport()">📱 Send WhatsApp Report</button>\n</div>`;
+  animateCounter(total);
+}
+
+function animateCounter(target){
+  const counter = document.getElementById('counter');
+  let count=0;
+  let step=Math.ceil(target/40)||1;
+  let interval=setInterval(()=>{
+    count+=step;
+    if(count>=target){ count=target; clearInterval(interval); }
+    if(counter) counter.innerText="K "+count;
+  },20);
+}
+
+function showStock(){
+let html=`<div class="card">
+<h3>Stock Management</h3>
+<h4 style="margin-top:15px">Products, Prices & Stock</h4>
+<div id="productsList"></div>
+<div style="display:flex;gap:8px;margin-top:12px">
+<button onclick="addNewProduct()" style="flex:1">+ Add Product</button>
+<button onclick="sendStockReport()" style="flex:1" class="secondary">Send Stock Report</button>
+</div>
+</div>`;
+  document.getElementById('content').innerHTML = html;
+renderStockList();
+}
+
+function renderStockList(){
+let html="";
+products.forEach((p,i)=>{
+html+=`<div style="background:var(--muted);padding:12px;margin:8px 0;border-radius:6px">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+<input type="text" value="${p.name||''}" placeholder="Product name" onchange="updateProduct(${i},'name',this.value)" style="padding:8px;background:var(--bg);border:1px solid #374151;border-radius:4px;color:white;font-size:13px">
+<input type="number" value="${p.price||0}" placeholder="Price" onchange="updateProduct(${i},'price',this.value)" style="padding:8px;background:var(--bg);border:1px solid #374151;border-radius:4px;color:white;font-size:13px">
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr 100px;gap:8px;align-items:center">
+<div>
+<label style="font-size:11px;opacity:.6">Stock</label>
+<input type="number" value="${p.stock||0}" placeholder="Stock" onchange="updateProduct(${i},'stock',this.value)" style="padding:6px;background:var(--bg);border:1px solid #374151;border-radius:4px;color:white;font-size:12px;margin-top:2px">
+</div>
+<div>
+<label style="font-size:11px;opacity:.6">Opening Stock</label>
+<input type="number" value="${p.openingStock||0}" placeholder="Opening" onchange="updateProduct(${i},'openingStock',this.value)" style="padding:6px;background:var(--bg);border:1px solid #374151;border-radius:4px;color:white;font-size:12px;margin-top:2px">
+</div>
+<div>
+<label style="font-size:11px;opacity:.6">Closing Stock</label>
+<input type="number" value="${p.closingStock||0}" placeholder="Closing" onchange="updateProduct(${i},'closingStock',this.value)" style="padding:6px;background:var(--bg);border:1px solid #374151;border-radius:4px;color:white;font-size:12px;margin-top:2px">
+</div>
+<button onclick="deleteProduct(${i})" class="danger" style="padding:6px 8px;margin:0;font-size:12px">Delete</button>
+</div>
+</div>`;
+});
+document.getElementById("productsList").innerHTML=html;
+}
+
+function updateProduct(index,field,value){
+if(field==='name') products[index].name=value;
+if(field==='price') products[index].price=Number(value)||0;
+if(field==='openingStock') products[index].openingStock=Number(value)||0;
+if(field==='closingStock') products[index].closingStock=Number(value)||0;
+if(field==='stock') products[index].stock = Number(value)||0;
+localStorage.setItem("products",JSON.stringify(products));
+renderProducts();
+renderStockList();
+// enqueue product update for backend
+offlineStock.push({ action:'product_update', device, productId: products[index].id, name: products[index].name, price: products[index].price, openingStock: products[index].openingStock||0, closingStock: products[index].closingStock||0, stock: products[index].stock||0, timestamp: new Date().toISOString(), synced:false });
+localStorage.setItem('offlineStock', JSON.stringify(offlineStock));
+syncStock();
+}
+
+function deleteProduct(index){
+  const pid = products[index] && products[index].id;
+  products.splice(index,1);
+  localStorage.setItem("products",JSON.stringify(products));
+  renderStockList();
+  renderProducts();
+  // enqueue delete for backend (use product id)
+  offlineStock.push({ action:'product_delete', device, productId: pid, timestamp: new Date().toISOString(), synced:false });
+  localStorage.setItem('offlineStock', JSON.stringify(offlineStock));
+  syncStock();
+}
+
+function addNewProduct(){
+const name=prompt("Product name:");
+if(!name) return;
+const price=prompt("Price:");
+if(!price) return;
+products.push({id:products.length+1,name:name,price:Number(price),stock:0,openingStock:0,closingStock:0});
+localStorage.setItem("products",JSON.stringify(products));
+renderStockList();
+renderProducts();
+// enqueue add for backend
+const newProd = products[products.length-1];
+offlineStock.push({ action:'product_add', device, productId: newProd.id, name: newProd.name, price: newProd.price, stock: newProd.stock||0, openingStock: newProd.openingStock||0, closingStock: newProd.closingStock||0, timestamp: new Date().toISOString(), synced:false });
+localStorage.setItem('offlineStock', JSON.stringify(offlineStock));
+syncStock();
+}
+
+function sendWhatsAppReport(){
+let total=0;
+let saleCount=0;
+let itemsByType={};
+let paymentBreakdown={};
+const reportDate=new Date().toLocaleDateString();
+
+offlineSales.forEach(s=>{
+total+=Number(s.total);
+saleCount++;
+itemsByType[s.item]=(itemsByType[s.item]||0)+1;
+paymentBreakdown[s.payment]=(paymentBreakdown[s.payment]||0)+Number(s.total);
+});
+
+let message=`*Pull Over SmartPOS Report - ${reportDate}*\n\n`;
+message+=`📊 Total Sales: K ${total}\n`;
+message+=`🛒 Transactions: ${saleCount}\n`;
+message+=`📱 Device: ${device}\n\n`;
+
+message+=`*Top Items:*\n`;
+Object.entries(itemsByType).slice(0,5).forEach(([item,count])=>{
+message+=`• ${item} (${count})\n`;
+});
+
+message+=`\n*Payment Methods:*\n`;
+Object.entries(paymentBreakdown).forEach(([method,amount])=>{
+message+=`• ${method}: K ${amount}\n`;
+});
+
+const encodedMsg=encodeURIComponent(message);
+const whatsappUrl=`https://wa.me/260955201532?text=${encodedMsg}`;
+window.open(whatsappUrl,'_blank');
+}
+
+function sendStockReport(){
+  // Compile stock quantities and value at selling price
+  let totalQty = 0;
+  let totalValue = 0;
+  const lines = [];
+  products.forEach(p=>{
+    const qty = Number(p.stock||0);
+    const price = Number(p.price||0);
+    const value = qty * price;
+    totalQty += qty;
+    totalValue += value;
+    lines.push(`• ${p.name}: ${qty} units — K ${value}`);
+  });
+
+  const reportDate = new Date().toLocaleString();
+  let message = `*Pull Over Stock Report - ${reportDate}*\n\n`;
+  message += `📦 Total Items (by units): ${totalQty}\n`;
+  message += `💰 Total Stock Value (selling price): K ${totalValue}\n\n`;
+  message += `*Stock Details:*\n` + lines.join('\n');
+
+  const url = `https://wa.me/260955201532?text=${encodeURIComponent(message)}`;
+  window.open(url, '_blank');
+}
+
+if('serviceWorker' in navigator){
+navigator.serviceWorker.register('service-worker.js');
+}
+</script>
+</body>
+</html>
