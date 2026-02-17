@@ -1,4 +1,4 @@
-const SCRIPT_URL = "PASTE_YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyN7B7xi0747vPY-bJP-vZ6PvbPw2CieIIncQzI4dTg1qs6ksl3aqfnUz3qepjhp3QhRQ/exec";
 
 let currentCashier = "";
 let cart = [];
